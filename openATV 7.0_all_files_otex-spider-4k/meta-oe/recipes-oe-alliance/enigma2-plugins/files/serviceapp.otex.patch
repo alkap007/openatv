@@ -1,0 +1,114 @@
+diff -uNr a/src/plugin/plugin.py b/src/plugin/plugin.py
+--- a/src/plugin/plugin.py	2021-07-31 16:14:09.000000000 +0200
++++ b/src/plugin/plugin.py	2021-11-25 21:20:49.440872200 +0100
+@@ -41,9 +41,10 @@
+ config_serviceapp = config.plugins.serviceapp
+ 
+ config_serviceapp.servicemp3 = ConfigSubsection()
+-config_serviceapp.servicemp3.replace = ConfigBoolean(default=False, descriptions={0: _("original"), 1: _("serviceapp")})
++config_serviceapp.servicemp3.replace = ConfigBoolean(default=True, descriptions={0: _("original"), 1: _("serviceapp")})
++serviceapp_client.setServiceMP3Replace(True)
+ config_serviceapp.servicemp3.replace.value = serviceapp_client.isServiceMP3Replaced()
+-config_serviceapp.servicemp3.player = ConfigSelection(default="gstplayer", choices=player_choices)
++config_serviceapp.servicemp3.player = ConfigSelection(default="exteplayer3", choices=player_choices)
+ 
+ config_serviceapp.options = ConfigSubDict()
+ config_serviceapp.options["servicemp3"] = ConfigSubsection()
+@@ -53,7 +54,7 @@
+     config_serviceapp.options[key].hls_explorer = ConfigBoolean(default=True, descriptions={False: _("false"), True: _("true")})
+     config_serviceapp.options[key].autoselect_stream = ConfigBoolean(default=True, descriptions={False: _("false"), True: _("true")})
+     config_serviceapp.options[key].connection_speed_kb = ConfigInteger(9999999, limits=(0, 9999999))
+-    config_serviceapp.options[key].autoturnon_subtitles = ConfigBoolean(default=True, descriptions={False: _("false"), True: _("true")})
++    config_serviceapp.options[key].autoturnon_subtitles = ConfigBoolean(default=False, descriptions={False: _("false"), True: _("true")})
+ 
+ config_serviceapp.gstplayer = ConfigSubDict()
+ config_serviceapp.gstplayer["servicemp3"] = ConfigSubsection()
+@@ -204,7 +205,7 @@
+         config_list.append(getConfigListEntry("  " + _("DTS software decoding"),
+             exteplayer3_options_cfg.dts_swdecoding, _("Turn on DTS software decoding.")))
+         config_list.append(getConfigListEntry("  " + _("MP3 software decoding"),
+-            exteplayer3_options_cfg.dts_swdecoding, _("Turn on MP3 software decoding.")))
++            exteplayer3_options_cfg.mp3_swdecoding, _("Turn on MP3 software decoding.")))
+         config_list.append(getConfigListEntry("  " + _("WMA software decoding"),
+             exteplayer3_options_cfg.wma_swdecoding, _("Turn on WMA1, WMA2, WMA/PRO software decoding.")))
+         config_list.append(getConfigListEntry("  " + _("Stereo downmix"),
+diff -uNr a/src/serviceapp/exteplayer3.cpp b/src/serviceapp/exteplayer3.cpp
+--- a/src/serviceapp/exteplayer3.cpp	2021-07-31 16:14:09.000000000 +0200
++++ b/src/serviceapp/exteplayer3.cpp	2021-11-26 09:38:27.396927900 +0100
+@@ -240,6 +240,7 @@
+ 
+ void ExtEplayer3::handleJsonOutput(cJSON *json)
+ {
++	int val;
+ 	if (!json->child)
+ 	{
+ 		return;
+@@ -247,10 +248,40 @@
+ 	const char *key = json->child->string;
+ 	cJSON* value = cJSON_GetObjectItem(json, key);
+ 
+-	if (!strcmp(key, "PLAYBACK_PLAY"))
++	if (!strcmp(key, "FF_ERROR"))
+ 	{
+-		if (!cJSON_GetObjectItem(value, "sts")->valueint)
++		recvStopped(0);
++		eDebug("ExtEPlayer3::handleJsonOutput - key \"%s\"", key);
++	}	
++	
++	else if (!strcmp(key, "PLAYBACK_OPEN"))
++	{
++		val = cJSON_GetObjectItem(value, "sts")->valueint;
++		if (val)	
++		{			
++			recvStopped(0);
++		}
++		eDebug("ExtEPlayer3::handleJsonOutput - key \"%s\"  %d", key, val);
++	}
++
++	else if (!strcmp(key, "OUTPUT_OPEN"))
++	{
++		val = cJSON_GetObjectItem(value, "sts")->valueint;
++		if (val)	
++		{			
++			recvStopped(0);
++		}
++		eDebug("ExtEPlayer3::handleJsonOutput - key \"%s\"  %d", key, val);
++	}
++	else if (!strcmp(key, ""))
++	{			
++			recvStopped(0);
++	}		
++	else if (!strcmp(key, "PLAYBACK_PLAY"))
++	{
++		if (!cJSON_GetObjectItem(value, "sts")->valueint)			
+ 			recvStarted(0);
++
+ 	}
+ 	else if (!strcmp(key, "v_c"))
+ 	{
+diff -uNr a/src/serviceapp/extplayer.cpp b/src/serviceapp/extplayer.cpp
+--- a/src/serviceapp/extplayer.cpp	2021-07-31 16:14:09.000000000 +0200
++++ b/src/serviceapp/extplayer.cpp	2021-11-26 11:00:07.550204000 +0100
+@@ -228,7 +228,7 @@
+ 	{
+ 		// wait 10 seconds for normal exit if timed out then kill process
+ 		mWaitForStop = true;
+-		WaitThread t(mWaitForStopMutex, mWaitForStopCond, mWaitForStop, 10000);
++		WaitThread t(mWaitForStopMutex, mWaitForStopCond, mWaitForStop, 2000);
+ 		t.run();
+ 		mMessageThread.send(Message(Message::tStop));
+ 		t.kill();
+diff -uNr a/src/serviceapp/myconsole.cpp b/src/serviceapp/myconsole.cpp
+--- a/src/serviceapp/myconsole.cpp	2021-07-31 16:14:09.000000000 +0200
++++ b/src/serviceapp/myconsole.cpp	2021-11-23 13:00:53.628982500 +0100
+@@ -293,7 +293,9 @@
+         queue_data &d = outbuf.front();
+         int wr = ::write( fd[1], d.data+d.dataSent, d.len-d.dataSent );
+         if (wr < 0)
+-            eDebug("eConsoleContainer write failed (%m)");
++        {			
++            //eDebug("eConsoleContainer write failed (%m)");
++        }			
+         else
+             d.dataSent += wr;
+         if (d.dataSent == d.len)
